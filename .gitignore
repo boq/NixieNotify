@@ -1,0 +1,28 @@
+# Package Files
+!gradle/wrapper/gradle-wrapper.jar
+*.jar
+
+# secrets
+src/main/resources/client_secret.json
+
+# Gradle
+.gradle/
+build/
+run/
+bin/
+
+# Eclipse
+.classpath
+.project
+.settings/
+
+# IntelliJ IDEA
+*.iml
+*.iws
+*.ipr
+.idea/
+
+# OS Garbage
+.DS_Store
+Thumbs.db
+desktop.ini
