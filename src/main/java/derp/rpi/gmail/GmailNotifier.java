@@ -36,7 +36,7 @@ public class GmailNotifier implements NotifySource {
     private static final String APPLICATION_NAME = "Nixie Notify";
 
     private static final Map<String, Color> LABEL_COLORS = ImmutableMap.of(
-            "CATEGORY_PERSONAL", Color.CYAN,
+            "CATEGORY_PERSONAL", Color.WHITE,
             "CATEGORY_SOCIAL", Color.BLUE,
             "CATEGORY_UPDATES", Color.YELLOW,
             "CATEGORY_PROMOTIONS", Color.GREEN,

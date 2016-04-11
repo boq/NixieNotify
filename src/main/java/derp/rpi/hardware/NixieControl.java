@@ -14,9 +14,11 @@ public class NixieControl {
     private final GpioPinDigitalOutput stcp;
     private final GpioPinDigitalOutput shcp;
 
+    private final GpioPinDigitalInput sw;
+
     private boolean initialized;
 
-    public NixieControl(Pin din, Pin oe, Pin stcp, Pin shcp) {
+    public NixieControl(Pin din, Pin oe, Pin stcp, Pin shcp, Pin sw) {
         this.din = gpio.provisionDigitalOutputPin(din, "DIN", PinState.LOW);
         this.din.setShutdownOptions(true, PinState.LOW);
 
@@ -29,6 +31,9 @@ public class NixieControl {
         this.shcp = gpio.provisionDigitalOutputPin(shcp, "SHCP", PinState.LOW);
         this.shcp.setShutdownOptions(true, PinState.LOW);
 
+        this.sw = gpio.provisionDigitalInputPin(sw, PinPullResistance.PULL_UP);
+        this.sw.setShutdownOptions(true);
+
         this.initialized = true;
     }
 
@@ -39,7 +44,7 @@ public class NixieControl {
         }
     }
 
-    public void update(BitSet state) {
+    public void updateTube(BitSet state) {
         Preconditions.checkState(initialized, "GPIO not initialized");
 
         for (int i = 0; i < 16; i++) {
@@ -51,5 +56,13 @@ public class NixieControl {
 
         stcp.high();
         stcp.low();
+    }
+
+    public void setTubeState(boolean state) {
+        oe.setState(!state); // active LOW
+    }
+
+    public boolean isSwitchOn() {
+        return sw.getState().isLow();
     }
 }

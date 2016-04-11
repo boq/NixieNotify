@@ -76,29 +76,35 @@ public class StateBuilder {
 
     private Set<Led> leds = Sets.newHashSet();
 
-    public void setDigit(Optional<Digit> digit) {
+    public StateBuilder setDigit(Optional<Digit> digit) {
         this.digit = digit;
+        return this;
     }
 
-    public void setUpperDot(boolean upperDot) {
+    public StateBuilder setUpperDot(boolean upperDot) {
         this.upperDot = upperDot;
+        return this;
     }
 
-    public void setLowerDot(boolean lowerDot) {
+    public StateBuilder setLowerDot(boolean lowerDot) {
         this.lowerDot = lowerDot;
+        return this;
     }
 
-    public boolean ledOn(Led color) {
-        return leds.add(color);
+    public StateBuilder ledOn(Led color) {
+        leds.add(color);
+        return this;
     }
 
-    public boolean ledOff(Led color) {
-        return leds.remove(color);
+    public StateBuilder ledOff(Led color) {
+        leds.remove(color);
+        return this;
     }
 
-    public void setColor(Color color) {
+    public StateBuilder setColor(Color color) {
         leds.clear();
         leds.addAll(color.components);
+        return this;
     }
 
     public BitSet bakeBits() {

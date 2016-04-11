@@ -1,6 +1,7 @@
 package derp.rpi;
 
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,64 +17,175 @@ import derp.rpi.hardware.StateBuilder.Digit;
 
 public class NixieNotify {
 
-    private static final int CYCLE_PERIOD = 1;
-    private static final int UPDATE_PERIOD = 10;
+    private static final BitSet HELLO_TUBE = new StateBuilder().setColor(Color.GREEN).bakeBits();
+    private static final BitSet STILL_ALIVE_TUBE = new StateBuilder().setColor(Color.CYAN).bakeBits();
+    private static final BitSet BYE_TUBE = new StateBuilder().setColor(Color.RED).bakeBits();
+
+    private static final int CYCLE_PERIOD = 1 * 1000;
+    private static final int UPDATE_PERIOD = 10 * 1000;
+    private static final int BLINK_PERIOD = 500;
+    private static final int SHORT_BLINK_PERIOD = 500;
+    private static final int HEARTBEAT_PERIOD = 5 * 60; // in multiples of CYCLE_PERIOD
+    private static final int IMMEDIATE = 0;
 
     private static final Logger logger = LoggerFactory.getLogger(NixieNotify.class);
 
-    public static void main(String[] args) {
-        final List<Notify> notifies = Lists.newCopyOnWriteArrayList();
+    private final AtomicBoolean updatesEnabled = new AtomicBoolean(false);
+    private final List<Notify> notifies = Lists.newCopyOnWriteArrayList();
 
+    public static class StateResult {
+        public final State nextState;
+        public final int delay;
+
+        public StateResult(State nextState, int delay) {
+            this.nextState = nextState;
+            this.delay = delay;
+        }
+    }
+
+    public interface State {
+        public StateResult execute(NixieControl control);
+    }
+
+    public class StateIdle implements State {
+        @Override
+        public StateResult execute(NixieControl control) {
+            if (control.isSwitchOn()) {
+                updatesEnabled.set(true);
+                control.updateTube(HELLO_TUBE);
+                control.setTubeState(true);
+                return new StateResult(new StateWaitForUpdates(), BLINK_PERIOD);
+            }
+
+            control.setTubeState(false);
+            return new StateResult(this, CYCLE_PERIOD);
+        }
+    }
+
+    public class StateHeartbeat implements State {
+        @Override
+        public StateResult execute(NixieControl control) {
+            if (!control.isSwitchOn())
+                return new StateResult(new StateOff(), IMMEDIATE);
+
+            control.updateTube(STILL_ALIVE_TUBE);
+            control.setTubeState(true);
+            return new StateResult(new StateWaitForUpdates(), SHORT_BLINK_PERIOD);
+        }
+    }
+
+    public class StateWaitForUpdates implements State {
+        private int heartbeatCountdown = HEARTBEAT_PERIOD;
+
+        @Override
+        public StateResult execute(NixieControl control) {
+            if (!control.isSwitchOn())
+                return new StateResult(new StateOff(), IMMEDIATE);
+
+            final Iterator<Notify> it = notifies.iterator();
+
+            if (it.hasNext())
+                return new StateResult(new StateDisplay(it), IMMEDIATE);
+
+            if (heartbeatCountdown-- <= 0) {
+                return new StateResult(new StateHeartbeat(), IMMEDIATE);
+            } else {
+                control.setTubeState(false);
+                return new StateResult(this, CYCLE_PERIOD);
+            }
+        }
+
+    }
+
+    public class StateDisplay implements State {
+        private final Iterator<Notify> it;
+
+        public StateDisplay(Iterator<Notify> it) {
+            this.it = it;
+        }
+
+        @Override
+        public StateResult execute(NixieControl control) {
+            if (!control.isSwitchOn())
+                return new StateResult(new StateOff(), IMMEDIATE);
+
+            if (!it.hasNext())
+                return new StateResult(new StateWaitForUpdates(), IMMEDIATE);
+
+            final Notify n = it.next();
+            control.updateTube(n.payload);
+            control.setTubeState(true);
+            return new StateResult(this, CYCLE_PERIOD);
+        }
+    }
+
+    public class StateOff implements State {
+        @Override
+        public StateResult execute(NixieControl control) {
+            updatesEnabled.set(false);
+            control.updateTube(BYE_TUBE);
+            control.setTubeState(true);
+            return new StateResult(new StateIdle(), BLINK_PERIOD);
+        }
+    }
+
+    private void startUpdateThread() {
         final List<NotifySource> sources = ImmutableList.of(
                 new GmailNotifier()
                 );
 
-        {
-            final Thread update = new Thread() {
-                @Override
-                public void run() {
-                    final Notify empty = new Notify("system:empty", new StateBuilder().bakeBits());
-                    while (true) {
-                        logger.info("Updating");
+        final Thread update = new Thread() {
+            @Override
+            public void run() {
+                while (true) {
+                    if (updatesEnabled.get()) {
+                        logger.debug("Updating");
 
-                        List<Notify> newNotifies = Lists.newArrayList();
+                        final List<Notify> newNotifies = Lists.newArrayList();
 
                         for (NotifySource source : sources)
                             newNotifies.addAll(source.query());
 
-                        if (newNotifies.isEmpty())
-                            newNotifies.add(empty);
-
                         notifies.clear();
                         notifies.addAll(newNotifies);
-
-                        try {
-                            Thread.sleep(UPDATE_PERIOD * 1000);
-                        } catch (InterruptedException e) {
-                            logger.info("Interrupted", e);
-                            break;
-                        }
+                    } else {
+                        logger.debug("Skipping update due to switch state");
+                        notifies.clear();
                     }
-                }
-            };
 
-            update.setName("update");
-            update.setDaemon(true);
-
-            update.start();
-        }
-
-        NixieControl control = null;
-        try {
-            control = new NixieControl(RaspiPin.GPIO_00, RaspiPin.GPIO_01, RaspiPin.GPIO_02, RaspiPin.GPIO_03);
-
-            while (true) {
-                for (Notify n : notifies) {
-                    control.update(n.payload);
                     try {
-                        Thread.sleep(CYCLE_PERIOD * 1000);
+                        Thread.sleep(UPDATE_PERIOD);
                     } catch (InterruptedException e) {
                         logger.info("Interrupted", e);
+                        break;
+                    }
+                }
+            }
+        };
+
+        update.setName("update");
+        update.setDaemon(true);
+
+        update.start();
+    }
+
+    public void loop() {
+        NixieControl control = null;
+        try {
+            logger.info("Initializing GPIO!");
+            control = new NixieControl(RaspiPin.GPIO_00, RaspiPin.GPIO_01, RaspiPin.GPIO_02, RaspiPin.GPIO_03, RaspiPin.GPIO_04);
+            logger.info("Entering main loop");
+            State state = new StateIdle();
+            while (true) {
+                logger.debug("State: {}", state.getClass().getName());
+                final StateResult r = state.execute(control);
+                state = r.nextState;
+
+                if (r.delay > 0) {
+                    try {
+                        Thread.sleep(r.delay);
+                    } catch (InterruptedException e) {
+                        logger.warn("Interrupted", e);
                         break;
                     }
                 }
@@ -82,6 +194,12 @@ public class NixieNotify {
             if (control != null)
                 control.stop();
         }
+    }
+
+    public static void main(String[] args) {
+        final NixieNotify nixieNotify = new NixieNotify();
+        nixieNotify.startUpdateThread();
+        nixieNotify.loop();
     }
 
     public static void nixieTest(NixieControl control) {
@@ -110,7 +228,7 @@ public class NixieNotify {
                     System.out.println("Invalid token: " + line);
                 }
 
-                control.update(stateBuilder.bakeBits());
+                control.updateTube(stateBuilder.bakeBits());
             }
         }
     }
