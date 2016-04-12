@@ -170,10 +170,8 @@ public class NixieNotify {
     }
 
     public void loop() {
-        NixieControl control = null;
-        try {
-            logger.info("Initializing GPIO!");
-            control = new NixieControl(RaspiPin.GPIO_00, RaspiPin.GPIO_01, RaspiPin.GPIO_02, RaspiPin.GPIO_03, RaspiPin.GPIO_04);
+        logger.info("Initializing GPIO!");
+        try (final NixieControl control = new NixieControl(RaspiPin.GPIO_00, RaspiPin.GPIO_01, RaspiPin.GPIO_02, RaspiPin.GPIO_03, RaspiPin.GPIO_04)) {
             logger.info("Entering main loop");
             State state = new StateIdle();
             while (true) {
@@ -190,9 +188,6 @@ public class NixieNotify {
                     }
                 }
             }
-        } finally {
-            if (control != null)
-                control.stop();
         }
     }
 

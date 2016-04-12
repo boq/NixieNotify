@@ -5,7 +5,7 @@ import java.util.BitSet;
 import com.google.common.base.Preconditions;
 import com.pi4j.io.gpio.*;
 
-public class NixieControl {
+public class NixieControl implements AutoCloseable {
 
     private final GpioController gpio = GpioFactory.getInstance();
 
@@ -37,7 +37,8 @@ public class NixieControl {
         this.initialized = true;
     }
 
-    public void stop() {
+    @Override
+    public void close() {
         if (initialized) {
             gpio.shutdown();
             initialized = false;
