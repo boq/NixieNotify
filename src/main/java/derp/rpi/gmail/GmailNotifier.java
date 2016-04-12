@@ -11,7 +11,11 @@ import com.google.api.client.extensions.java6.auth.oauth2.AuthorizationCodeInsta
 import com.google.api.client.extensions.jetty.auth.oauth2.LocalServerReceiver;
 import com.google.api.client.googleapis.auth.oauth2.GoogleAuthorizationCodeFlow;
 import com.google.api.client.googleapis.auth.oauth2.GoogleClientSecrets;
+import com.google.api.client.googleapis.batch.BatchRequest;
+import com.google.api.client.googleapis.batch.json.JsonBatchCallback;
 import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
+import com.google.api.client.googleapis.json.GoogleJsonError;
+import com.google.api.client.http.HttpHeaders;
 import com.google.api.client.http.HttpTransport;
 import com.google.api.client.json.JsonFactory;
 import com.google.api.client.json.jackson2.JacksonFactory;
@@ -93,7 +97,7 @@ public class GmailNotifier implements NotifySource {
     @Override
     public List<Notify> query() {
         final Gmail service = getGmailService();
-
+        final BatchRequest batch = service.batch();
         try {
             final ListMessagesResponse unreadMessages = service.users().messages().list("me").setLabelIds(Arrays.asList("UNREAD", "INBOX")).execute();
             final List<Message> messages = unreadMessages.getMessages();
@@ -107,15 +111,28 @@ public class GmailNotifier implements NotifySource {
 
             for (String newMessageId : newMessages) {
                 logger.info("Fetching {}", newMessageId);
-                final Message fullMsg = service.users().messages().get("me", newMessageId).execute();
-                cache.put(newMessageId, new CachedMessage(fullMsg.getLabelIds()));
+                service.users().messages().get("me", newMessageId).queue(batch, new JsonBatchCallback<Message>() {
+                    @Override
+                    public void onSuccess(Message t, HttpHeaders responseHeaders) {
+                        cache.put(t.getId(), new CachedMessage(t.getLabelIds()));
+                    }
+
+                    @Override
+                    public void onFailure(GoogleJsonError e, HttpHeaders responseHeaders) {
+                        logger.warn("Failed to get message, error = {}", e);
+                    }
+                });
             }
+
+            if (batch.size() > 0)
+                batch.execute();
 
             final Multiset<String> labels = TreeMultiset.create();
 
             for (String msgId : unreadMessagesIds) {
                 final CachedMessage msg = cache.get(msgId);
-                labels.addAll(msg.labels);
+                if (msg != null)
+                    labels.addAll(msg.labels);
             }
 
             labels.retainAll(LABEL_COLORS.keySet());
