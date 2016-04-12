@@ -26,7 +26,7 @@ public class StateBuilder {
     }
 
     public enum Color {
-        BLACK(),
+        NONE(),
 
         RED(Led.RED),
         GREEN(Led.GREEN),

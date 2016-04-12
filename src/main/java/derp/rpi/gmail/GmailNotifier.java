@@ -35,17 +35,27 @@ import derp.rpi.hardware.StateBuilder.Digit;
 
 public class GmailNotifier implements NotifySource {
 
-    private static final Logger logger = LoggerFactory.getLogger(GmailNotifier.class);
-
-    private static final String APPLICATION_NAME = "Nixie Notify";
-
-    private static final Map<String, Color> LABEL_COLORS = ImmutableMap.of(
+    private static final Map<String, Color> DEFAULT_LABEL_COLORS = ImmutableMap.of(
             "CATEGORY_PERSONAL", Color.WHITE,
             "CATEGORY_SOCIAL", Color.BLUE,
             "CATEGORY_UPDATES", Color.YELLOW,
             "CATEGORY_PROMOTIONS", Color.GREEN,
             "IMPORTANT", Color.RED
             );
+
+    public static class Config {
+        public Map<String, Color> labelColors = new HashMap<>(DEFAULT_LABEL_COLORS);
+    }
+
+    private static final Logger logger = LoggerFactory.getLogger(GmailNotifier.class);
+
+    private static final String APPLICATION_NAME = "Nixie Notify";
+
+    private final Map<String, Color> labelColors;
+
+    public GmailNotifier(Config config) {
+        this.labelColors = ImmutableMap.copyOf(config.labelColors);
+    }
 
     private static Gmail initializeGmailService() throws Exception {
         final InputStream in = GmailNotifier.class.getResourceAsStream("/client_secret.json");
@@ -135,7 +145,7 @@ public class GmailNotifier implements NotifySource {
                     labels.addAll(msg.labels);
             }
 
-            labels.retainAll(LABEL_COLORS.keySet());
+            labels.retainAll(labelColors.keySet());
 
             final List<Notify> notifies = Lists.newArrayList();
             for (Multiset.Entry<String> e : labels.entrySet()) {
@@ -150,10 +160,10 @@ public class GmailNotifier implements NotifySource {
         }
     }
 
-    private static BitSet createNotifyPayload(String label, int count) {
+    private BitSet createNotifyPayload(String label, int count) {
         final StateBuilder builder = new StateBuilder();
 
-        final Color color = LABEL_COLORS.getOrDefault(label, Color.WHITE);
+        final Color color = labelColors.getOrDefault(label, Color.WHITE);
         builder.setColor(color);
 
         if (count > 9) {
@@ -168,7 +178,7 @@ public class GmailNotifier implements NotifySource {
     }
 
     public static void main(String[] args) {
-        GmailNotifier notifier = new GmailNotifier();
+        GmailNotifier notifier = new GmailNotifier(new Config());
         final List<Notify> query = notifier.query();
         System.out.println(query);
     }

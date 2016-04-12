@@ -7,6 +7,14 @@ import com.pi4j.io.gpio.*;
 
 public class NixieControl implements AutoCloseable {
 
+    public static class Config {
+        public String din = RaspiPin.GPIO_00.getName();
+        public String oe = RaspiPin.GPIO_01.getName();
+        public String stcp = RaspiPin.GPIO_02.getName();
+        public String shcp = RaspiPin.GPIO_03.getName();
+        public String toggle = RaspiPin.GPIO_04.getName();
+    }
+
     private final GpioController gpio = GpioFactory.getInstance();
 
     private final GpioPinDigitalOutput din;
@@ -18,20 +26,26 @@ public class NixieControl implements AutoCloseable {
 
     private boolean initialized;
 
-    public NixieControl(Pin din, Pin oe, Pin stcp, Pin shcp, Pin sw) {
-        this.din = gpio.provisionDigitalOutputPin(din, "DIN", PinState.LOW);
+    private static Pin getPin(String name) {
+        final Pin pin = RaspiPin.getPinByName(name);
+        Preconditions.checkArgument(pin != null, "Invalid pin: %s", name);
+        return pin;
+    }
+
+    public NixieControl(Config pins) {
+        this.din = gpio.provisionDigitalOutputPin(getPin(pins.din), "DIN", PinState.LOW);
         this.din.setShutdownOptions(true, PinState.LOW);
 
-        this.oe = gpio.provisionDigitalOutputPin(oe, "OE", PinState.LOW);
+        this.oe = gpio.provisionDigitalOutputPin(getPin(pins.oe), "OE", PinState.LOW);
         this.oe.setShutdownOptions(true, PinState.HIGH);
 
-        this.stcp = gpio.provisionDigitalOutputPin(stcp, "STCP", PinState.LOW);
+        this.stcp = gpio.provisionDigitalOutputPin(getPin(pins.stcp), "STCP", PinState.LOW);
         this.stcp.setShutdownOptions(true, PinState.LOW);
 
-        this.shcp = gpio.provisionDigitalOutputPin(shcp, "SHCP", PinState.LOW);
+        this.shcp = gpio.provisionDigitalOutputPin(getPin(pins.shcp), "SHCP", PinState.LOW);
         this.shcp.setShutdownOptions(true, PinState.LOW);
 
-        this.sw = gpio.provisionDigitalInputPin(sw, PinPullResistance.PULL_UP);
+        this.sw = gpio.provisionDigitalInputPin(getPin(pins.toggle), PinPullResistance.PULL_UP);
         this.sw.setShutdownOptions(true);
 
         this.initialized = true;

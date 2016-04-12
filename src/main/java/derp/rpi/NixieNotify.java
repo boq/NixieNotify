@@ -8,7 +8,6 @@ import org.slf4j.LoggerFactory;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
-import com.pi4j.io.gpio.RaspiPin;
 
 import derp.rpi.gmail.GmailNotifier;
 import derp.rpi.hardware.*;
@@ -17,21 +16,52 @@ import derp.rpi.hardware.StateBuilder.Digit;
 
 public class NixieNotify {
 
-    private static final BitSet HELLO_TUBE = new StateBuilder().setColor(Color.GREEN).bakeBits();
-    private static final BitSet STILL_ALIVE_TUBE = new StateBuilder().setColor(Color.CYAN).bakeBits();
-    private static final BitSet BYE_TUBE = new StateBuilder().setColor(Color.RED).bakeBits();
+    public static class Config {
+        public Color startupFlashColor = Color.GREEN;
+        public Color shutdownFlashColor = Color.RED;
+        public Color heartbeatFlashColor = Color.CYAN;
 
-    private static final int CYCLE_PERIOD = 1 * 1000;
-    private static final int UPDATE_PERIOD = 10 * 1000;
-    private static final int BLINK_PERIOD = 500;
-    private static final int SHORT_BLINK_PERIOD = 500;
-    private static final int HEARTBEAT_PERIOD = 5 * 60; // in multiples of CYCLE_PERIOD
+        public boolean enableHeartbeat = true;
+
+        public int cyclePeriod = 1 * 1000;
+        public int updatePeriod = 10 * 1000;
+        public int stateIndicationDuration = 500;
+        public int heartbeatDuration = 500;
+        public int heartbeatPeriod = 5 * 60; // in multiples of CYCLE_PERIOD
+    }
+
+    private final BitSet helloTube;
+    private final BitSet stillAliveTube;
+    private final BitSet byeTube;
+
+    private final boolean heartbeatEnabled;
+
+    private final int cyclePeriod;
+    private final int updatePeriod;
+    private final int blinkDuration;
+    private final int heartbeatDuration;
+    private final int heartbeatPeriod;
+
     private static final int IMMEDIATE = 0;
 
     private static final Logger logger = LoggerFactory.getLogger(NixieNotify.class);
 
     private final AtomicBoolean updatesEnabled = new AtomicBoolean(false);
     private final List<Notify> notifies = Lists.newCopyOnWriteArrayList();
+
+    public NixieNotify(Config config) {
+        this.helloTube = new StateBuilder().setColor(config.startupFlashColor).bakeBits();
+        this.stillAliveTube = new StateBuilder().setColor(config.heartbeatFlashColor).bakeBits();
+        this.byeTube = new StateBuilder().setColor(config.shutdownFlashColor).bakeBits();
+
+        this.heartbeatEnabled = config.enableHeartbeat;
+
+        this.blinkDuration = config.stateIndicationDuration;
+        this.cyclePeriod = config.cyclePeriod;
+        this.heartbeatPeriod = config.heartbeatPeriod;
+        this.heartbeatDuration = config.heartbeatDuration;
+        this.updatePeriod = config.updatePeriod;
+    }
 
     public static class StateResult {
         public final State nextState;
@@ -52,13 +82,13 @@ public class NixieNotify {
         public StateResult execute(NixieControl control) {
             if (control.isSwitchOn()) {
                 updatesEnabled.set(true);
-                control.updateTube(HELLO_TUBE);
+                control.updateTube(helloTube);
                 control.setTubeState(true);
-                return new StateResult(new StateWaitForUpdates(), BLINK_PERIOD);
+                return new StateResult(new StateWaitForUpdates(), blinkDuration);
             }
 
             control.setTubeState(false);
-            return new StateResult(this, CYCLE_PERIOD);
+            return new StateResult(this, cyclePeriod);
         }
     }
 
@@ -68,14 +98,14 @@ public class NixieNotify {
             if (!control.isSwitchOn())
                 return new StateResult(new StateOff(), IMMEDIATE);
 
-            control.updateTube(STILL_ALIVE_TUBE);
+            control.updateTube(stillAliveTube);
             control.setTubeState(true);
-            return new StateResult(new StateWaitForUpdates(), SHORT_BLINK_PERIOD);
+            return new StateResult(new StateWaitForUpdates(), heartbeatDuration);
         }
     }
 
     public class StateWaitForUpdates implements State {
-        private int heartbeatCountdown = HEARTBEAT_PERIOD;
+        private int heartbeatCountdown = heartbeatPeriod;
 
         @Override
         public StateResult execute(NixieControl control) {
@@ -87,11 +117,11 @@ public class NixieNotify {
             if (it.hasNext())
                 return new StateResult(new StateDisplay(it), IMMEDIATE);
 
-            if (heartbeatCountdown-- <= 0) {
+            if (heartbeatEnabled && heartbeatCountdown-- <= 0) {
                 return new StateResult(new StateHeartbeat(), IMMEDIATE);
             } else {
                 control.setTubeState(false);
-                return new StateResult(this, CYCLE_PERIOD);
+                return new StateResult(this, cyclePeriod);
             }
         }
 
@@ -115,7 +145,7 @@ public class NixieNotify {
             final Notify n = it.next();
             control.updateTube(n.payload);
             control.setTubeState(true);
-            return new StateResult(this, CYCLE_PERIOD);
+            return new StateResult(this, cyclePeriod);
         }
     }
 
@@ -123,16 +153,14 @@ public class NixieNotify {
         @Override
         public StateResult execute(NixieControl control) {
             updatesEnabled.set(false);
-            control.updateTube(BYE_TUBE);
+            control.updateTube(byeTube);
             control.setTubeState(true);
-            return new StateResult(new StateIdle(), BLINK_PERIOD);
+            return new StateResult(new StateIdle(), blinkDuration);
         }
     }
 
-    private void startUpdateThread() {
-        final List<NotifySource> sources = ImmutableList.of(
-                new GmailNotifier()
-                );
+    private void startUpdateThread(GmailNotifier.Config gmailConfig) {
+        final List<NotifySource> sources = ImmutableList.of(new GmailNotifier(gmailConfig));
 
         final Thread update = new Thread() {
             @Override
@@ -154,7 +182,7 @@ public class NixieNotify {
                     }
 
                     try {
-                        Thread.sleep(UPDATE_PERIOD);
+                        Thread.sleep(updatePeriod);
                     } catch (InterruptedException e) {
                         logger.info("Interrupted", e);
                         break;
@@ -169,9 +197,9 @@ public class NixieNotify {
         update.start();
     }
 
-    public void loop() {
+    public void displayLoop(NixieControl.Config nixieConfig) {
         logger.info("Initializing GPIO!");
-        try (final NixieControl control = new NixieControl(RaspiPin.GPIO_00, RaspiPin.GPIO_01, RaspiPin.GPIO_02, RaspiPin.GPIO_03, RaspiPin.GPIO_04)) {
+        try (final NixieControl control = new NixieControl(nixieConfig)) {
             logger.info("Entering main loop");
             State state = new StateIdle();
             while (true) {
@@ -192,9 +220,12 @@ public class NixieNotify {
     }
 
     public static void main(String[] args) {
-        final NixieNotify nixieNotify = new NixieNotify();
-        nixieNotify.startUpdateThread();
-        nixieNotify.loop();
+        final ConfigHelper configHelper = new ConfigHelper();
+        final MainConfig config = configHelper.readConfig();
+
+        final NixieNotify nixieNotify = new NixieNotify(config.display);
+        nixieNotify.startUpdateThread(config.gmail);
+        nixieNotify.displayLoop(config.nixieModule);
     }
 
     public static void nixieTest(NixieControl control) {
