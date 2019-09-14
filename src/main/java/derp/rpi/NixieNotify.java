@@ -1,18 +1,23 @@
 package derp.rpi;
 
-import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
-
 import derp.rpi.gmail.GmailNotifier;
-import derp.rpi.hardware.*;
+import derp.rpi.hardware.NixieControl;
+import derp.rpi.hardware.StateBuilder;
 import derp.rpi.hardware.StateBuilder.Color;
 import derp.rpi.hardware.StateBuilder.Digit;
+import java.util.BitSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+import java.util.Scanner;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class NixieNotify {
 
@@ -28,10 +33,13 @@ public class NixieNotify {
         public int stateIndicationDuration = 500;
         public int heartbeatDuration = 500;
         public int heartbeatPeriod = 5 * 60; // in multiples of CYCLE_PERIOD
+        public int cleanupCycles = 5;
+        public int digitCleanupDuration = 100;
     }
 
     private final BitSet helloTube;
     private final BitSet stillAliveTube;
+    private final List<BitSet> cleanUpTube;
     private final BitSet byeTube;
 
     private final boolean heartbeatEnabled;
@@ -41,6 +49,8 @@ public class NixieNotify {
     private final int blinkDuration;
     private final int heartbeatDuration;
     private final int heartbeatPeriod;
+    private final int cleanupCycles;
+    private final int digitCleanupDuration;
 
     private static final int IMMEDIATE = 0;
 
@@ -54,6 +64,9 @@ public class NixieNotify {
         this.stillAliveTube = new StateBuilder().setColor(config.heartbeatFlashColor).bakeBits();
         this.byeTube = new StateBuilder().setColor(config.shutdownFlashColor).bakeBits();
 
+        this.cleanUpTube = Stream.of(Digit.values()).map(d -> new StateBuilder().setDigit(Optional.of(d)).setColor(Color.MAGENTA).bakeBits()).collect(Collectors.toList());
+        this.cleanupCycles = config.cleanupCycles * cleanUpTube.size();
+        this.digitCleanupDuration = config.digitCleanupDuration;
         this.heartbeatEnabled = config.enableHeartbeat;
 
         this.blinkDuration = config.stateIndicationDuration;
@@ -82,13 +95,28 @@ public class NixieNotify {
         public StateResult execute(NixieControl control) {
             if (control.isSwitchOn()) {
                 updatesEnabled.set(true);
+                return new StateResult(new StateStartup(), IMMEDIATE);
+            }
+
+            control.setTubeState(false);
+            return new StateResult(this, cyclePeriod);
+        }
+    }
+
+    public class StateStartup implements State {
+        private int startupCountdown = cleanupCycles;
+
+        @Override
+        public StateResult execute(NixieControl control) {
+            if (startupCountdown-- <= 0) {
                 control.updateTube(helloTube);
                 control.setTubeState(true);
                 return new StateResult(new StateWaitForUpdates(), blinkDuration);
             }
 
-            control.setTubeState(false);
-            return new StateResult(this, cyclePeriod);
+            control.updateTube(cleanUpTube.get(startupCountdown % cleanUpTube.size()));
+            control.setTubeState(true);
+            return new StateResult(this, digitCleanupDuration);
         }
     }
 
